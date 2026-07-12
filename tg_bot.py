@@ -90,12 +90,13 @@ events_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-
 def filter_events(period: str):
-    days = PERIODS[period][1]
-    if days is None:
-        return EVENTS
     now = datetime.now()
+    days = PERIODS[period][1]
+
+    if days is None:
+        return [e for e in EVENTS if e["date"] >= now]
+
     end = now + timedelta(days=days)
     return [e for e in EVENTS if now <= e["date"] <= end]
 
