@@ -11,7 +11,13 @@ from aiogram.filters import CommandStart
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 
-EVENTS = [
+pythonEVENTS = [
+    {
+        "title": "Митап по Python",
+        "date": datetime.now() + timedelta(hours=5),
+        "location": "Москва, Лубянский проезд, 27",
+        "description": "Пицца и разговоры про асинхронность.",
+    },
     {
         "title": "Ивент для разработчиков",
         "date": datetime(2026, 7, 15, 19, 0),
