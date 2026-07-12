@@ -11,7 +11,7 @@ from aiogram.filters import CommandStart
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 
-pythonEVENTS = [
+EVENTS = [
     {
         "title": "Митап по Python",
         "date": datetime.now() + timedelta(hours=5),
@@ -37,6 +37,7 @@ pythonEVENTS = [
         "description": "24 часа, призовой фонд 500 000 ₽.",
     },
 ]
+EVENTS.sort(key=lambda e: e["date"])
 
 PERIODS = {
     "day": ("за день", 1),
@@ -156,10 +157,8 @@ async def paginate_events(callback: CallbackQuery):
 async def back_to_menu(callback: CallbackQuery):
     if not callback.message:
         return
-    await callback.message.delete()
-    await callback.message.answer(
-        "Главное меню 👇",
-        reply_markup=main_menu,
+    await callback.message.edit_text(
+        "Вы вышли из раздела событий. Выберите пункт меню ниже 👇"
     )
     await callback.answer()
 
