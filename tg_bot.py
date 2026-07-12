@@ -126,12 +126,15 @@ async def start(message: Message):
 
 @dp.message(F.text == "📅 События")
 async def show_events(message: Message):
-    events = filter_events("all")
-    await message.answer(
-        event_card(events, 0, "all"),
-        reply_markup=event_keyboard(events, 0, "all"),
-        parse_mode="HTML",
-    )
+    try:
+        events = filter_events("all")
+        await message.answer(
+            event_card(events, 0, "all"),
+            reply_markup=event_keyboard(events, 0, "all"),
+            parse_mode="HTML",
+        )
+    except Exception as ex:
+        await message.answer(f"Ошибка: {ex}")
 
 
 @dp.callback_query(F.data.startswith("event_"))
@@ -139,16 +142,19 @@ async def paginate_events(callback: CallbackQuery):
     if not callback.data or not callback.message:
         return
 
-    _, period, index = callback.data.split("_")
-    index = int(index)
-    events = filter_events(period)
+    try:
+        _, period, index = callback.data.split("_")
+        index = int(index)
+        events = filter_events(period)
 
-    text = event_card(events, index, period)
-    keyboard = event_keyboard(events, index, period)
+        text = event_card(events, index, period)
+        keyboard = event_keyboard(events, index, period)
 
-    # чтобы телеграм не ругался, если текст не поменялся
-    if callback.message.html_text != text:
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        # чтобы телеграм не ругался, если текст не поменялся
+        if callback.message.html_text != text:
+            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as ex:
+        await callback.message.answer(f"Ошибка: {ex}")
 
     await callback.answer()
 
