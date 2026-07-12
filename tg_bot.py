@@ -46,6 +46,14 @@ PERIODS = {
     "all": ("все события", None),
 }
 
+# текст кнопки -> ключ периода
+PERIOD_BUTTONS = {
+    "За день": "day",
+    "За неделю": "week",
+    "За месяц": "month",
+    "Все события": "all",
+}
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -53,6 +61,19 @@ main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 События")],
         [KeyboardButton(text="ℹ️ О боте")],
+    ],
+    resize_keyboard=True,
+)
+
+events_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(text="За день"),
+            KeyboardButton(text="За неделю"),
+            KeyboardButton(text="За месяц"),
+        ],
+        [KeyboardButton(text="Все события")],
+        [KeyboardButton(text="🏠 Главное меню")],
     ],
     resize_keyboard=True,
 )
@@ -84,31 +105,16 @@ def event_card(events, index, period):
 
 
 def event_keyboard(events, index, period):
-    rows = []
+    # листалка нужна, только если событий больше одного
+    if len(events) <= 1:
+        return None
 
-    # навигация по событиям (только если есть что листать)
-    if len(events) > 1:
-        prev_index = (index - 1) % len(events)
-        next_index = (index + 1) % len(events)
-        rows.append([
-            InlineKeyboardButton(text="◀️ Назад", callback_data=f"event_{period}_{prev_index}"),
-            InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"event_{period}_{next_index}"),
-        ])
-
-    # выбор периода
-    rows.append([
-        InlineKeyboardButton(text="За день", callback_data="event_day_0"),
-        InlineKeyboardButton(text="За неделю", callback_data="event_week_0"),
-        InlineKeyboardButton(text="За месяц", callback_data="event_month_0"),
-    ])
-    rows.append([
-        InlineKeyboardButton(text="Все события", callback_data="event_all_0"),
-    ])
-    rows.append([
-        InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu"),
-    ])
-
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    prev_index = (index - 1) % len(events)
+    next_index = (index + 1) % len(events)
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Назад", callback_data=f"event_{period}_{prev_index}"),
+        InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"event_{period}_{next_index}"),
+    ]])
 
 
 @dp.message(CommandStart())
@@ -126,15 +132,34 @@ async def start(message: Message):
 
 @dp.message(F.text == "📅 События")
 async def show_events(message: Message):
-    try:
-        events = filter_events("all")
-        await message.answer(
-            event_card(events, 0, "all"),
-            reply_markup=event_keyboard(events, 0, "all"),
-            parse_mode="HTML",
-        )
-    except Exception as ex:
-        await message.answer(f"Ошибка: {ex}")
+    await message.answer(
+        "Раздел событий. Выбери период внизу 👇",
+        reply_markup=events_menu,
+    )
+    await message.answer(
+        event_card(filter_events("all"), 0, "all"),
+        reply_markup=event_keyboard(filter_events("all"), 0, "all"),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(F.text.in_(PERIOD_BUTTONS))
+async def show_by_period(message: Message):
+    period = PERIOD_BUTTONS[message.text]
+    events = filter_events(period)
+    await message.answer(
+        event_card(events, 0, period),
+        reply_markup=event_keyboard(events, 0, period),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(F.text == "🏠 Главное меню")
+async def back_to_menu(message: Message):
+    await message.answer(
+        "Главное меню 👇",
+        reply_markup=main_menu,
+    )
 
 
 @dp.callback_query(F.data.startswith("event_"))
@@ -142,30 +167,16 @@ async def paginate_events(callback: CallbackQuery):
     if not callback.data or not callback.message:
         return
 
-    try:
-        _, period, index = callback.data.split("_")
-        index = int(index)
-        events = filter_events(period)
+    _, period, index = callback.data.split("_")
+    index = int(index)
+    events = filter_events(period)
 
-        text = event_card(events, index, period)
-        keyboard = event_keyboard(events, index, period)
+    text = event_card(events, index, period)
+    keyboard = event_keyboard(events, index, period)
 
-        # чтобы телеграм не ругался, если текст не поменялся
-        if callback.message.html_text != text:
-            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as ex:
-        await callback.message.answer(f"Ошибка: {ex}")
+    if callback.message.html_text != text:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "menu")
-async def back_to_menu(callback: CallbackQuery):
-    if not callback.message:
-        return
-    await callback.message.edit_text(
-        "Вы вышли из раздела событий. Выберите пункт меню ниже 👇"
-    )
     await callback.answer()
 
 
