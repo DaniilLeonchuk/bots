@@ -12,7 +12,7 @@ from aiogram.filters import CommandStart
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 
 EVENTS = [
-        {
+    {
         "title": "Старый митап (прошёл)",
         "date": datetime(2026, 1, 10, 18, 0),
         "location": "Москва",
@@ -123,6 +123,18 @@ EVENTS = [
 ]
 EVENTS.sort(key=lambda e: e["date"])
 
+# у каждого события — стабильный id (позиция после сортировки),
+# по нему храним избранное и раздаём кнопки конкретному событию
+for _idx, _e in enumerate(EVENTS):
+    _e["id"] = _idx
+
+EVENTS_BY_ID = {e["id"]: e for e in EVENTS}
+
+# user_id -> множество id избранных событий (в памяти, без БД)
+FAVORITES: dict[int, set[int]] = {}
+
+BATCH_SIZE = 5  # сколько событий отправлять за раз одним "куском"
+
 PERIODS = {
     "day": ("за день", 1),
     "week": ("за неделю", 7),
@@ -144,6 +156,7 @@ dp = Dispatcher()
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 События")],
+        [KeyboardButton(text="⭐ Избранное")],
         [KeyboardButton(text="ℹ️ О боте")],
     ],
     resize_keyboard=True,
@@ -162,6 +175,7 @@ events_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+
 def filter_events(period: str):
     now = datetime.now()
     days = PERIODS[period][1]
@@ -173,33 +187,80 @@ def filter_events(period: str):
     return [e for e in EVENTS if now <= e["date"] <= end]
 
 
-def event_card(events, index, period):
-    period_name = PERIODS[period][0]
-    if not events:
-        return f"<b>События {period_name}</b>\n\nНичего не найдено 😕"
+def get_events_for(period: str, user_id: int):
+    """period может быть ключом из PERIODS или спец-значением "fav" (избранное)."""
+    if period == "fav":
+        ids = FAVORITES.get(user_id, set())
+        favs = [EVENTS_BY_ID[i] for i in ids if i in EVENTS_BY_ID]
+        favs.sort(key=lambda e: e["date"])
+        return favs
+    return filter_events(period)
 
-    e = events[index]
+
+def label_for(period: str) -> str:
+    if period == "fav":
+        return "Избранное"
+    return PERIODS[period][0]
+
+
+def event_text(e: dict) -> str:
+    """Текст карточки одного события — отдельное сообщение, без 'X из Y'."""
     return (
         f"<b>{e['title']}</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"<b>Дата:</b> {e['date'].strftime('%d.%m.%Y %H:%M')}\n"
         f"<b>Место:</b> {e['location']}\n"
-        f"{e['description']}\n\n"
-        f"<i>Событие {index + 1} из {len(events)} ({period_name})</i>"
+        f"{e['description']}"
     )
 
 
-def event_keyboard(events, index, period):
-    # листалка нужна, только если событий больше одного
-    if len(events) <= 1:
-        return None
+def is_favorite(user_id: int, event_id: int) -> bool:
+    return event_id in FAVORITES.get(user_id, set())
 
-    prev_index = (index - 1) % len(events)
-    next_index = (index + 1) % len(events)
+
+def event_keyboard(event_id: int, favorite: bool) -> InlineKeyboardMarkup:
+    """У каждого события — своя клавиатура (кнопка избранного). Это касается
+    ВСЕХ событий, включая те, что подгружаются через 'Показать ещё' —
+    send_events_batch вешает эту клавиатуру на каждое отправленное сообщение,
+    независимо от того, из какой оно партии."""
+    text = "✅ В избранном (нажми, чтобы убрать)" if favorite else "⭐ В избранное"
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="◀️ Назад", callback_data=f"event_{period}_{prev_index}"),
-        InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"event_{period}_{next_index}"),
+        InlineKeyboardButton(text=text, callback_data=f"fav_{event_id}"),
     ]])
+
+
+def more_keyboard(period: str, next_offset: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="▶️ Показать ещё", callback_data=f"more_{period}_{next_offset}"),
+    ]])
+
+
+async def send_events_batch(answerable, events, period: str, offset: int, user_id: int):
+    """Отправляет события отдельными сообщениями (у каждого своя клавиатура).
+    Если событий в выборке больше BATCH_SIZE (5), показывает только часть
+    + кнопку 'Показать ещё' для подгрузки остальных — тоже с кнопками."""
+    if not events:
+        await answerable.answer(
+            f"<b>{label_for(period)}</b>\n\nНичего не найдено 😕",
+            parse_mode="HTML",
+        )
+        return
+
+    batch = events[offset:offset + BATCH_SIZE]
+    for e in batch:
+        await answerable.answer(
+            event_text(e),
+            reply_markup=event_keyboard(e["id"], is_favorite(user_id, e["id"])),
+            parse_mode="HTML",
+        )
+
+    shown = offset + len(batch)
+    remaining = len(events) - shown
+    if remaining > 0:
+        await answerable.answer(
+            f"Показано {shown} из {len(events)} ({label_for(period)}).",
+            reply_markup=more_keyboard(period, shown),
+        )
 
 
 @dp.message(CommandStart())
@@ -221,22 +282,21 @@ async def show_events(message: Message):
         "Раздел событий. Выбери период внизу 👇",
         reply_markup=events_menu,
     )
-    await message.answer(
-        event_card(filter_events("all"), 0, "all"),
-        reply_markup=event_keyboard(filter_events("all"), 0, "all"),
-        parse_mode="HTML",
-    )
+    events = filter_events("all")
+    await send_events_batch(message, events, "all", 0, message.from_user.id)
 
 
 @dp.message(F.text.in_(PERIOD_BUTTONS))
 async def show_by_period(message: Message):
     period = PERIOD_BUTTONS[message.text]
     events = filter_events(period)
-    await message.answer(
-        event_card(events, 0, period),
-        reply_markup=event_keyboard(events, 0, period),
-        parse_mode="HTML",
-    )
+    await send_events_batch(message, events, period, 0, message.from_user.id)
+
+
+@dp.message(F.text == "⭐ Избранное")
+async def show_favorites(message: Message):
+    events = get_events_for("fav", message.from_user.id)
+    await send_events_batch(message, events, "fav", 0, message.from_user.id)
 
 
 @dp.message(F.text == "🏠 Главное меню")
@@ -247,21 +307,39 @@ async def back_to_menu(message: Message):
     )
 
 
-@dp.callback_query(F.data.startswith("event_"))
-async def paginate_events(callback: CallbackQuery):
-    if not callback.data or not callback.message:
+@dp.callback_query(F.data.startswith("fav_"))
+async def toggle_favorite(callback: CallbackQuery):
+    if not callback.data or not callback.message or not callback.from_user:
         return
 
-    _, period, index = callback.data.split("_")
-    index = int(index)
-    events = filter_events(period)
+    event_id = int(callback.data.split("_", 1)[1])
+    user_id = callback.from_user.id
+    favs = FAVORITES.setdefault(user_id, set())
 
-    text = event_card(events, index, period)
-    keyboard = event_keyboard(events, index, period)
+    if event_id in favs:
+        favs.discard(event_id)
+        added = False
+    else:
+        favs.add(event_id)
+        added = True
 
-    if callback.message.html_text != text:
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.message.edit_reply_markup(reply_markup=event_keyboard(event_id, added))
+    await callback.answer("Добавлено в избранное ⭐" if added else "Убрано из избранного")
 
+
+@dp.callback_query(F.data.startswith("more_"))
+async def show_more(callback: CallbackQuery):
+    if not callback.data or not callback.message or not callback.from_user:
+        return
+
+    _, period, offset_str = callback.data.split("_", 2)
+    offset = int(offset_str)
+    user_id = callback.from_user.id
+    events = get_events_for(period, user_id)
+
+    # убираем старую кнопку "Показать ещё", чтобы на неё нельзя было нажать повторно
+    await callback.message.delete()
+    await send_events_batch(callback.message, events, period, offset, user_id)
     await callback.answer()
 
 
